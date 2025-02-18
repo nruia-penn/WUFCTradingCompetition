@@ -227,9 +227,9 @@ def call_all_strategies():
     for participant in participants_copy:
         if hasattr(participant, 'strategy') and callable(participant.strategy):
             executor.submit(
-                participant.strategy,
-                order_queue_manager,
-                order_book_manager
+                participant.strategy
+                #order_queue_manager,
+                #order_book_manager
             )
 
     return "All strategies submitted."
