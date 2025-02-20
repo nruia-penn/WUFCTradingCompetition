@@ -20,6 +20,7 @@ Happy Trading!
 from typing import Optional, List, Dict
 
 from Participant import Participant
+import numpy as np
 
 class CompetitorBoilerplate(Participant):
     def __init__(self, 
@@ -44,25 +45,110 @@ class CompetitorBoilerplate(Participant):
 
         # Strategy parameters (fixed defaults)
         self.symbols: List[str] = ["NVR", "CPMD", "MFH", "ANG", "TVW"]
+
+
+        self.symbols: List[str] = ["NVR", "CPMD", "MFH", "ANG", "TVW"]
+        self.order_size = 10  # Default order size
+        self.default_spread = 0.01  # 1% spread for bid/ask adjustments
+        self.max_volatility_threshold = 5  # Maximum volatility before reducing order size
+        self.max_position_size = 500  # Limit per symbol to prevent excessive shorting
+        
+        # Track active orders and volatility memory
+        self.active_orders = {}  # {order_id: symbol}
+        self.volatility_memory = {symbol: [] for symbol in self.symbols}
+
+        self.daily_returns = []
+        self.previous_balance = balance
+
         
 ## ONLY EDIT THE CODE BELOW 
 
+
+    def cancel_old_orders(self, symbol: str):
+            """
+            Cancels all outdated orders to free up capital.
+            :param symbol: The trading symbol whose orders need to be refreshed.
+            """
+            print(f"[DEBUG] Cancelling old orders for {symbol}...")
+            orders_to_cancel = list(self.active_orders.keys())
+            for order_id in orders_to_cancel:
+                success = self.remove_order(order_id, symbol)
+                if success:
+                    del self.active_orders[order_id]
+                    print(f"[DEBUG] Cancelled Order {order_id} for {symbol}")
+
     def strategy(self):
-        """
-        Implement your core trading logic here.
-        
-        Example:
-            def strategy(self):
-                snapshot = self.get_order_book_snapshot("NVR")
-                bids = snapshot.get('bids', [])
-                asks = snapshot.get('asks', [])
-                if not bids or not asks:
-                    return
-                best_bid = bids[0][0]
-                best_ask = asks[0][0]
-                if best_ask < 150:
-                    order_id = self.create_limit_order(price=149.5, size=10, side='buy', symbol="NVR")
-                    
-        """
-        # Placeholder for competitor's strategy logic
-        pass
+        current_balance = self.get_balance
+        if self.previous_balance > 0:
+            daily_return = (current_balance - self.previous_balance) / self.previous_balance
+            self.daily_returns.append(daily_return)
+        self.previous_balance = current_balance
+
+        for symbol in self.symbols:
+            snapshot = self.get_order_book_snapshot(symbol)
+            bids = snapshot.get('bids', [])
+            asks = snapshot.get('asks', [])
+
+            if not bids or not asks:
+                print(f"[DEBUG] No market data for {symbol}, skipping...")
+                continue
+
+            best_bid = bids[0][0]
+            best_ask = asks[0][0]
+            mid_price = (best_bid + best_ask) / 2
+
+            # Track recent mid-prices to calculate volatility
+            self.volatility_memory[symbol].append(mid_price)
+            if len(self.volatility_memory[symbol]) > 20:
+                self.volatility_memory[symbol].pop(0)
+
+            volatility = np.std(self.volatility_memory[symbol]) if len(self.volatility_memory[symbol]) > 5 else 0.01\
+            
+            dynamic_spread = max(0.01, volatility * 0.05)
+
+            # Adjust order size based on volatility
+            adjusted_order_size = max(1, self.order_size * (1 - min(volatility / self.max_volatility_threshold, 1)))
+
+            # Cancel old orders before placing new ones
+            self.cancel_old_orders(symbol)
+
+            portfolio = self.get_portfolio
+            current_position = portfolio.get(symbol, 0) if portfolio else 0
+
+            # Prevent excessive shorting
+            if current_position < -self.max_position_size:
+                print(f"[WARNING] Skipping short trade for {symbol}, already over limit.")
+                continue
+
+            # Ensure orders are placed at a realistic spread
+            new_bid = round(best_bid * (1 - dynamic_spread), 2)  # Buy slightly below best bid
+            new_ask = round(best_ask * (1 + dynamic_spread), 2)  # Sell slightly above best ask
+
+            # Place buy order
+            bid_order_id = self.create_limit_order(price=new_bid, size=int(adjusted_order_size), side='buy', symbol=symbol)
+            if bid_order_id:
+                self.active_orders[bid_order_id] = symbol
+                print(f"[DEBUG] Placed Buy Order: {symbol} @ {new_bid}, Size: {int(adjusted_order_size)}")
+
+            # Place sell order
+            ask_order_id = self.create_limit_order(price=new_ask, size=int(adjusted_order_size), side='sell', symbol=symbol)
+            if ask_order_id:
+                self.active_orders[ask_order_id] = symbol
+                print(f"[DEBUG] Placed Sell Order: {symbol} @ {new_ask}, Size: {int(adjusted_order_size)}")
+            
+            if len(self.daily_returns) >= 10:
+                sharpe = self.calculate_sharpe_ratio()
+                print(f"[INFO] Sharpe Ratio: {sharpe:.2f}")
+
+    def calculate_sharpe_ratio(self, risk_free_rate=0.0):
+        if len(self.daily_returns) < 2:
+            return 0  # Not enough data points
+
+        mean_return = np.mean(self.daily_returns)
+        std_dev = np.std(self.daily_returns)
+
+        if std_dev == 0:
+            return 0  # Avoid division by zero
+
+        sharpe_ratio = (mean_return - risk_free_rate) / std_dev
+        return sharpe_ratio
