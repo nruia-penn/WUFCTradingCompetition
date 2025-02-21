@@ -102,9 +102,9 @@ class CompetitorBoilerplate(Participant):
             if len(self.volatility_memory[symbol]) > 20:
                 self.volatility_memory[symbol].pop(0)
 
-            volatility = np.std(self.volatility_memory[symbol]) if len(self.volatility_memory[symbol]) > 5 else 0.01\
+            volatility = np.std(self.volatility_memory[symbol]) if len(self.volatility_memory[symbol]) > 5 else 0.01
             
-            dynamic_spread = max(0.01, volatility * 0.05)
+            dynamic_spread = max(0.01, volatility * 0.08)
 
             # Adjust order size based on volatility
             adjusted_order_size = max(1, self.order_size * (1 - min(volatility / self.max_volatility_threshold, 1)))
@@ -135,20 +135,3 @@ class CompetitorBoilerplate(Participant):
             if ask_order_id:
                 self.active_orders[ask_order_id] = symbol
                 print(f"[DEBUG] Placed Sell Order: {symbol} @ {new_ask}, Size: {int(adjusted_order_size)}")
-            
-            if len(self.daily_returns) >= 10:
-                sharpe = self.calculate_sharpe_ratio()
-                print(f"[INFO] Sharpe Ratio: {sharpe:.2f}")
-
-    def calculate_sharpe_ratio(self, risk_free_rate=0.0):
-        if len(self.daily_returns) < 2:
-            return 0  # Not enough data points
-
-        mean_return = np.mean(self.daily_returns)
-        std_dev = np.std(self.daily_returns)
-
-        if std_dev == 0:
-            return 0  # Avoid division by zero
-
-        sharpe_ratio = (mean_return - risk_free_rate) / std_dev
-        return sharpe_ratio
