@@ -7,7 +7,6 @@ from OrderQueue import PerTickerOrderQueue
 
 
 class OrderBookManager:
-    # In OrderBookManager
     def __init__(self, participant_manager):
         self.order_books: Dict[str, LimitOrderBook] = {}
         self.participant_manager = participant_manager

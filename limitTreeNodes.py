@@ -1,10 +1,12 @@
 from OrderList import OrderList
+import traceback
+import math
+
 
 class LimitLevel:
-
     __slots__ = [
         'price', 'size', 'parent', 'left_child', 'right_child', 'orders',
-        '_height'  # <-- store cached height here
+        '_height'  # cached height
     ]
 
     def __init__(self, order):
@@ -14,7 +16,7 @@ class LimitLevel:
         self.parent = None
         self.left_child = None
         self.right_child = None
-        
+
         self._height = 1
 
         self.orders = OrderList(self)
@@ -30,7 +32,6 @@ class LimitLevel:
 
     @property
     def balance_factor(self):
-
         right_height = self.right_child._height if self.right_child else 0
         left_height = self.left_child._height if self.left_child else 0
         return right_height - left_height
@@ -43,11 +44,9 @@ class LimitLevel:
 
     @property
     def height(self):
-
         return self._height
 
     def _update_height(self):
-
         left_height = self.left_child._height if self.left_child else 0
         right_height = self.right_child._height if self.right_child else 0
         self._height = max(left_height, right_height) + 1
@@ -78,9 +77,7 @@ class LimitLevel:
             if new_value:
                 new_value.parent = self.parent
 
-
     def remove(self):
-
         if self.left_child and self.right_child:
             successor = self.right_child.min
             self.price, self.size = successor.price, successor.size
@@ -98,22 +95,19 @@ class LimitLevel:
             self.grandpa.balance()
 
     def balance(self):
-
         self._update_height()
 
-        if self.is_root:
-            return
-
-        if self.balance_factor > 1:
-            if self.right_child.balance_factor < 0:
+        # Only trigger rebalancing if imbalance exceeds threshold (2)
+        if self.balance_factor > 2:
+            if self.right_child and self.right_child.balance_factor < 0:
                 self._rl_case()
             else:
                 self._rr_case()
-        elif self.balance_factor < -1:
-            if self.left_child.balance_factor < 0:
-                self._ll_case()
-            else:
+        elif self.balance_factor < -2:
+            if self.left_child and self.left_child.balance_factor > 0:
                 self._lr_case()
+            else:
+                self._ll_case()
 
         self._update_height()
 
@@ -121,8 +115,8 @@ class LimitLevel:
             self.parent.balance()
 
     def _ll_case(self):
-
         child = self.left_child
+        # Re-link parent's pointer
         if self.is_root:
             self.parent.right_child = child
         elif self.parent.left_child == self:
@@ -141,7 +135,6 @@ class LimitLevel:
         child._update_height()
 
     def _rr_case(self):
-
         child = self.right_child
         if self.is_root:
             self.parent.right_child = child
@@ -161,8 +154,9 @@ class LimitLevel:
         child._update_height()
 
     def _lr_case(self):
-
-        child, grand_child = self.left_child, self.left_child.right_child
+        # Left-right case: first rotate left at the left child, then right at self.
+        child = self.left_child
+        grand_child = child.right_child
         child.parent, grand_child.parent = grand_child, self
         child.right_child = grand_child.left_child
         if child.right_child:
@@ -171,8 +165,9 @@ class LimitLevel:
         self._ll_case()
 
     def _rl_case(self):
-
-        child, grand_child = self.right_child, self.right_child.left_child
+        # Right-left case: first rotate right at the right child, then left at self.
+        child = self.right_child
+        grand_child = child.left_child
         child.parent, grand_child.parent = grand_child, self
         child.left_child = grand_child.right_child
         if child.left_child:
@@ -183,8 +178,8 @@ class LimitLevel:
     def __str__(self):
         if not self.is_root:
             s = f'Node Value: {self.price}\n'
-            s += f'Node left_child value: {self.left_child.price if self.left_child else "None"}\n'
-            s += f'Node right_child value: {self.right_child.price if self.right_child else "None"}\n\n'
+            s += f'Left Child: {self.left_child.price if self.left_child else "None"}\n'
+            s += f'Right Child: {self.right_child.price if self.right_child else "None"}\n\n'
         else:
             s = ''
 
@@ -214,7 +209,9 @@ class LimitLevelTree:
                 if current_node.right_child is None:
                     current_node.right_child = limit_level
                     limit_level.parent = current_node
-                    limit_level.balance_grandpa()
+                    # Only balance if imbalance is significant.
+                    if abs(current_node.balance_factor) > 2:
+                        current_node.balance_grandpa()
                     break
                 else:
                     current_node = current_node.right_child
@@ -222,12 +219,13 @@ class LimitLevelTree:
                 if current_node.left_child is None:
                     current_node.left_child = limit_level
                     limit_level.parent = current_node
-                    limit_level.balance_grandpa()
+                    if abs(current_node.balance_factor) > 2:
+                        current_node.balance_grandpa()
                     break
                 else:
                     current_node = current_node.left_child
             else:
-                raise ValueError(f"LimitLevel with price {limit_level.price} already exists. also this is")
+                raise ValueError(f"LimitLevel with price {limit_level.price} already exists.")
 
     def find(self, price):
         current_node = self.right_child

@@ -84,6 +84,9 @@ for i in range(1, num_bots + 1):
     participant_manager.add_participant(bot)
     bot.start(ROUND_ENDED_EVENT)
 
+competitor_bots = []
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -91,15 +94,37 @@ def login():
         if participant_id:
             p = participant_manager.get_participant(participant_id)
             if not p:
-                p = CompetitorBoilerplate(participant_id=participant_id, order_book_manager=order_book_manager, order_queue_manager=order_queue_manager)
+                # Create a competitor participant instance
+                p = CompetitorBoilerplate(
+                    participant_id=participant_id,
+                    order_book_manager=order_book_manager,
+                    order_queue_manager=order_queue_manager
+                )
                 participant_manager.add_participant(p)
-                
-
+                competitor_bots.append(p)  # Store only competitor bots
                 p.start(ROUND_ENDED_EVENT)
             session['participant_id'] = participant_id
             return redirect(url_for('dashboard'))
     return render_template('login.html')
 
+from concurrent.futures import ThreadPoolExecutor
+executor = ThreadPoolExecutor(max_workers=100)
+
+@app.route('/call_all_strategies')
+def call_all_strategies():
+    if ROUND_ENDED_EVENT.is_set():
+        return "Round has ended. No more trading."
+
+    # Iterate directly over competitor bots only
+    for competitor in competitor_bots:
+        if callable(competitor.strategy):
+            executor.submit(
+                competitor.strategy,
+                order_queue_manager,
+                order_book_manager
+            )
+
+    return "All competitor strategies submitted."
 @app.route('/')
 def index():
     if 'participant_id' in session:
@@ -157,7 +182,10 @@ def dashboard():
     holdings = participant.get_portfolio
     balance = participant.get_balance
     best_bid_prices = {sym: order_book_manager.get_order_book(sym).get_best_price(askForBid=True) for sym in holdings.keys()}
-    portfolio_value = sum(best_bid_prices.get(sym, 0) * qty for sym, qty in holdings.items())
+    portfolio_value = sum(
+        best_bid_prices[sym] * qty
+        for sym, qty in holdings.items()
+        if best_bid_prices.get(sym) is not None)
     pnl = portfolio_value + balance - 100000.0
 
 
@@ -215,25 +243,19 @@ def logout():
     return redirect(url_for('login'))
 
 
-from concurrent.futures import ThreadPoolExecutor
-executor = ThreadPoolExecutor(max_workers=num_bots*50)
-
-@app.route('/call_all_strategies')
-def call_all_strategies():
-    if ROUND_ENDED_EVENT.is_set():
-        return "Round has ended. No more trading."
-    participants_copy = list(participant_manager.participants.values())
-
-    for participant in participants_copy:
-        if hasattr(participant, 'strategy') and callable(participant.strategy):
-            executor.submit(
-                participant.strategy,
-                order_queue_manager,
-                order_book_manager
-            )
-
-    return "All strategies submitted."
-
+@app.route('/orderbooks_size')
+def orderbooks_size():
+    sizes = {}
+    for sec in securities:
+        symbol = sec["symbol"]
+        snapshot = order_book_manager.get_order_book_snapshot(symbol)
+        sizes[symbol] = {
+            "bids_count": len(snapshot['bids']),
+            "asks_count": len(snapshot['asks'])
+        }
+    # Optionally print to the console
+    print("Order Book Sizes:", sizes)
+    return jsonify(sizes)
 
 @app.route('/end_round')
 def end_round():

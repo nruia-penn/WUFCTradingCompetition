@@ -1,38 +1,38 @@
 from limitTreeNodes import LimitLevelTree
 from limitTreeNodes import LimitLevel
 import traceback
+import threading
 
 class LimitOrderBook:
 
     def __init__(self, symbol: str):
-        self.bids = LimitLevelTree()      # AVL tree for bids
-        self.asks = LimitLevelTree()      # AVL tree for asks
-        self.best_bid = None             # Points to the LimitLevel node with highest price
-        self.best_ask = None             # Points to the LimitLevel node with lowest price
+        self.bids = LimitLevelTree()      
+        self.asks = LimitLevelTree()     
+        self.best_bid = None             
+        self.best_ask = None            
 
         self._price_levels = {}
-
         self._orders = {}
         self.symbol = symbol
         self.hasProcessed = 0
+        self.price_floor = 0
+        self.price_cap = 1000
+
+        self.lock = threading.Lock()
 
     def top_level(self, askForBid: bool):
-
         if askForBid:
             return self.best_bid.orders.head if self.best_bid is not None else None
         else:
             return self.best_ask.orders.head if self.best_ask is not None else None
 
     def get_best_price(self, askForBid: bool):
-
         if askForBid:
             return self.best_bid.price if self.best_bid else None
         else:
             return self.best_ask.price if self.best_ask else None
 
-
     def process(self, order, quantity: int):
-
         if order.size == 0:
             self.remove(order)
         else:
@@ -41,40 +41,46 @@ class LimitOrderBook:
             else:
                 self.add(order)
 
-
     def update(self, order, size_diff):
-
         self._orders[order.order_id].size = order.size
         self._orders[order.order_id].parent_limit.size -= size_diff
 
     def remove(self, order):
+       
+        with self.lock:
+            try:
+                
+                removed_order = self._orders.pop(order.order_id)
+            except KeyError:
+                return False
 
-        try:
-            popped_item = self._orders.pop(order.order_id)
-        except KeyError:
-            return False
+            
+            level_key = (removed_order.price, removed_order.is_bid)
+            try:
+                limit_level = self._price_levels[level_key]
+               
+                limit_level.orders.remove(removed_order)
 
-        popped_item.pop_from_list()
-
-        level_key = (popped_item.price, popped_item.is_bid)
-        try:
-            if len(self._price_levels[level_key]) == 0:
-                popped_limit_level = self._price_levels.pop(level_key)
-
-                popped_limit_level.remove()
-                if popped_item.is_bid:
-                    if popped_limit_level == self.best_bid:
-                        self._update_best_bid()
-                else:
-                    if popped_limit_level == self.best_ask:
-                        self._update_best_ask()
-
-        except KeyError as e:
-            print("Error removing price level from dictionary", e)
-            traceback.print_exc()
-            pass
+                
+                if len(limit_level.orders) == 0:
+                    self._price_levels.pop(level_key)
+                    limit_level.remove()
+                    if removed_order.is_bid:
+                        if limit_level == self.best_bid:
+                            self._update_best_bid()
+                    else:
+                        if limit_level == self.best_ask:
+                            self._update_best_ask()
+            except KeyError as e:
+                print("Error removing price level from dictionary", e)
+                traceback.print_exc()
+                pass
 
     def add(self, order):
+        if order.price < self.price_floor or order.price > self.price_cap:
+            print(
+                f"Ignoring order {order.order_id} with price {order.price} outside bounds [{self.price_floor}, {self.price_cap}]")
+            return
 
         level_key = (order.price, order.is_bid)
         already_in_dict = level_key in self._price_levels
@@ -93,11 +99,9 @@ class LimitOrderBook:
                     self.asks.insert(limit_level)
                     if (self.best_ask is None) or (limit_level.price < self.best_ask.price):
                         self.best_ask = limit_level
-
             else:
                 self._orders[order.order_id] = order
                 self._price_levels[level_key].append(order)
-
         except Exception as e:
             if already_in_dict:
                 print("Exception while adding order to existing level:", e)
@@ -128,7 +132,6 @@ class LimitOrderBook:
         return self.best_ask.orders.head
 
     def get_order_book(self, depth=None):
-
         try:
             bid_keys = []
             ask_keys = []
