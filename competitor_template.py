@@ -1,25 +1,7 @@
-"""
-Boilerplate Competitor Class
-----------------------------
-
-Instructions for Participants:
-1. Do not import external libraries beyond what's provided.
-2. Focus on implementing the `strategy()` method with your trading logic.
-3. Use the provided methods to interact with the exchange:
-   - self.create_limit_order(price, size, side, symbol) -> order_id if succesfully placed in order book or None
-   - self.create_market_order(size, side, symbol) -> order_id if succesfully placed in order book or None
-   - self.remove_order(order_id, symbol) -> bool
-   - self.get_order_book_snapshot(symbol) -> dict
-   - self.get_balance() -> float
-   - self.get_portfolio() -> dict
-
-   
-Happy Trading!
-"""
-
 from typing import Optional, List, Dict
-
 from Participant import Participant
+import numpy as np
+import random
 
 class CompetitorBoilerplate(Participant):
     def __init__(self, 
@@ -27,14 +9,6 @@ class CompetitorBoilerplate(Participant):
                  order_book_manager=None,
                  order_queue_manager=None,
                  balance: float = 100000.0):
-        """
-        Initializes the competitor with default strategy parameters.
-        
-        :param participant_id: Unique ID for the competitor.
-        :param order_book_manager: Reference to the OrderBookManager.
-        :param order_queue_manager: Reference to the OrderQueueManager.
-        :param balance: Starting balance for the competitor.
-        """
         super().__init__(
             participant_id=participant_id,
             balance=balance,
@@ -42,30 +16,145 @@ class CompetitorBoilerplate(Participant):
             order_queue_manager=order_queue_manager
         )
 
-        # Strategy parameters (fixed defaults)
         self.symbols: List[str] = ["NVR", "CPMD", "MFH", "ANG", "TVW"]
         
-## ONLY EDIT THE CODE BELOW 
-
     def strategy(self):
-        """
-        An adaptive rebalancing strategy designed to improve risk-adjusted performance:
+        # 1. Rolling price collection
+        if not hasattr(self, "price_history"):
+            self.price_history = {s: [] for s in self.symbols}
+
+        # 2. GP parameters
+        population_size = 8
+        generations = 3
+        lookback = 15
+        sharpe_evaluate_window = 10
+        sharpe_threshold = 0.0825
         
-        1. For each symbol, get the current order book snapshot.
-        2. Calculate the mid-price and estimate volatility using the relative spread.
-        3. Adjust the order size based on the estimated volatility.
-        4. Adjust the limit order offset based on volatility:
-        - When volatility is low, use a larger offset (more aggressive pricing).
-        - When volatility is high, use a tighter offset (more conservative pricing).
-        5. Place a buy order if current holdings are below target or a sell order if above target.
-        """
-        print('got here')
-        snapshot = self.get_order_book_snapshot("NVR")
-        bids = snapshot.get('bids', [])
-        asks = snapshot.get('asks', [])
-        if not bids or not asks:
-            return
-        best_bid = bids[0][0]
-        best_ask = asks[0][0]
-        if best_ask < 150:
-            order_id = self.create_limit_order(price=149.5, size=10, side='buy', symbol="NVR")
+        # 3. Create GP population if missing
+        if not hasattr(self, "gp_population"):
+            self.gp_population = []
+            for _ in range(population_size):
+                individual = {
+                    "weights": [random.uniform(-1, 1) for _ in range(3)],
+                    "fitness": None
+                }
+                self.gp_population.append(individual)
+        
+        # 4. Best rule fallback
+        if not hasattr(self, "best_rule"):
+            self.best_rule = {"weights": [0, 0, 0], "fitness": -999}
+        
+        # Track how many times we've run GP
+        if not hasattr(self, "gp_runs"):
+            self.gp_runs = 0
+        
+        # Update mid-prices
+        for symbol in self.symbols:
+            snapshot = self.get_order_book_snapshot(symbol)
+            # If no order book data, skip
+            if not snapshot['bids'] or not snapshot['asks']:
+                continue
+
+            # Extract best bid/ask carefully, skipping None
+            raw_best_bid = snapshot['bids'][0][0]
+            raw_best_ask = snapshot['asks'][0][0]
+            if raw_best_bid is None or raw_best_ask is None:
+                # Skip if we can't get numeric prices
+                continue
+
+            mid_price = (raw_best_bid + raw_best_ask) / 2
+            self.price_history[symbol].append(mid_price)
+            # keep only 'lookback' prices
+            if len(self.price_history[symbol]) > lookback:
+                self.price_history[symbol].pop(0)
+
+        # 5. Run GP if we haven't done it yet
+        if self.gp_runs < 1:
+            for _ in range(generations):
+                # Evaluate fitness
+                for ind in self.gp_population:
+                    all_returns = []
+                    for symbol in self.symbols:
+                        prices = self.price_history[symbol]
+                        if len(prices) < sharpe_evaluate_window:
+                            continue
+                        
+                        momentum = (prices[-1] / prices[0]) - 1
+                        volatility = np.std(prices)
+                        slope = (prices[-1] - prices[0]) / (sharpe_evaluate_window + 1e-6)
+
+                        w = ind["weights"]
+                        signal = w[0]*momentum + w[1]*volatility + w[2]*slope
+
+                        # Build daily returns for this window
+                        daily_returns = []
+                        for i in range(len(prices) - 1):
+                            ret = (prices[i+1] - prices[i]) / (prices[i] + 1e-6)
+                            daily_returns.append(ret if signal > 0 else -ret)
+
+                        if len(daily_returns) > 1:
+                            sr = np.mean(daily_returns) / (np.std(daily_returns) + 1e-9)
+                            all_returns.append(sr)
+                    
+                    if len(all_returns) == 0:
+                        ind["fitness"] = -999
+                    else:
+                        ind["fitness"] = np.mean(all_returns)
+                
+                # Sort population by fitness
+                self.gp_population.sort(key=lambda x: x["fitness"], reverse=True)
+                half = population_size // 2
+                parents = self.gp_population[:half]
+                children = []
+                
+                while len(children) < half:
+                    p1, p2 = random.sample(parents, 2)
+                    child_w = [(a + b)/2.0 for a, b in zip(p1["weights"], p2["weights"])]
+                    # mutate one weight
+                    idx = random.randint(0, 2)
+                    child_w[idx] += random.uniform(-0.1, 0.1)
+                    children.append({"weights": child_w, "fitness": None})
+                
+                self.gp_population = parents + children
+            
+            # After generations, pick best
+            if self.gp_population:
+                for ind in self.gp_population:
+                    if ind["fitness"] is None:
+                        ind["fitness"] = -999
+                self.best_rule = max(self.gp_population, key=lambda x: x["fitness"])
+            else:
+                self.best_rule = {"weights": [0, 0, 0], "fitness": -999}
+            
+            self.gp_runs += 1
+        
+        # 6. Use best rule to place trades
+        w0, w1, w2 = self.best_rule["weights"]
+        
+        for symbol in self.symbols:
+            snapshot = self.get_order_book_snapshot(symbol)
+            if not snapshot['bids'] or not snapshot['asks']:
+                continue
+            # If top-of-book is None, skip
+            raw_best_bid = snapshot['bids'][0][0]
+            raw_best_ask = snapshot['asks'][0][0]
+            if raw_best_bid is None or raw_best_ask is None:
+                continue
+
+            if len(self.price_history[symbol]) < 2:
+                continue
+
+            best_bid = raw_best_bid
+            best_ask = raw_best_ask
+            prices = self.price_history[symbol]
+
+            momentum = (prices[-1]/prices[0] - 1) if len(prices) > 1 else 0
+            volatility = np.std(prices)
+            slope = (prices[-1] - prices[0]) / (len(prices) + 1e-6)
+
+            signal = w0*momentum + w1*volatility + w2*slope
+
+            if signal > sharpe_threshold:
+                self.create_limit_order(price=best_bid + 0.01, size=10, side='buy', symbol=symbol)
+            elif signal < -sharpe_threshold:
+                self.create_limit_order(price=best_ask - 0.01, size=10, side='sell', symbol=symbol)
