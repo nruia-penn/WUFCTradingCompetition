@@ -43,7 +43,6 @@ class CompetitorBoilerplate(Participant):
             order_queue_manager=order_queue_manager
         )
 
-        # Strategy parameters (fixed defaults)
         self.symbols: List[str] = ["NVR", "CPMD", "MFH", "ANG", "TVW"]
         
     def strategy(self):
@@ -164,7 +163,21 @@ class CompetitorBoilerplate(Participant):
 
             signal = w0*momentum + w1*volatility + w2*slope
 
+            risk_fraction = 0.01
+            balance = self.get_balance()
+            risk_per_trade = risk_fraction * balance
+            
+            mid_price = (best_bid + best_ask) / 2
+            stop_loss_distance = volatility * mid_price
+            if stop_loss_distance < 1e-6:
+                stop_loss_distance = 1e-6
+            
+            optimal_size = risk_per_trade / stop_loss_distance
+            
+            scaling_factor = min(1.0, abs(signal) / sharpe_threshold)
+            final_order_size = int(max(1, optimal_size * scaling_factor))
+            
             if signal > sharpe_threshold:
-                self.create_limit_order(price=best_bid + 0.01, size=20, side='buy', symbol=symbol)
+                self.create_limit_order(price=best_bid + 0.01, size=final_order_size, side='buy', symbol=symbol)
             elif signal < -sharpe_threshold:
-                self.create_limit_order(price=best_ask - 0.01, size=20, side='sell', symbol=symbol)
+                self.create_limit_order(price=best_ask - 0.01, size=final_order_size, side='sell', symbol=symbol)
