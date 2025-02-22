@@ -61,8 +61,8 @@ class MatchEngine:
                     'buyer_order_id': buyOrder.order_id,
                     'seller_order_id': sellOrder.order_id,
                     'symbol': buyOrder.symbol,
-                    'buy_price': buyOrder.price, # if buyOrder.price else sellOrder.price
-                    'sell_price': sellOrder.price, # if sellOrder.price else buyOrder.price
+                    'buy_price': buyOrder.price, 
+                    'sell_price': sellOrder.price, 
                     'quantity': trade_quantity
                 })
                 self.orderBook.process(aggressiveOrder, trade_quantity)
